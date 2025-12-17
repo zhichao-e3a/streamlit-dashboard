@@ -7,11 +7,7 @@ import plotly.graph_objects as go
 from datetime import date, datetime
 from collections import Counter
 
-st.set_page_config(
-    page_title="Patient Analytics Dashboard",
-    layout="wide"
-)
-
+st.set_page_config(page_title="Patient Analytics Dashboard", layout="wide")
 st.title("Patient Analytics Dashboard")
 st.divider()
 

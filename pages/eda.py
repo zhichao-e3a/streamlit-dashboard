@@ -4,7 +4,6 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="EDA Dashboard", layout="wide")
-
 st.title("Data Analytics Dashboard")
 st.divider()
 
