@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DEFAULT_TIMEOUT=120 \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
     PIP_TRUSTED_HOST=mirrors.aliyun.com \
-    APP_MODE=test
+    APP_MODE=remote
 
 WORKDIR /app
 

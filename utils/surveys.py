@@ -372,7 +372,7 @@ async def upsert(df_pre, df_post):
         pre_unique_records.append(record)
 
     await mongo.upsert_documents_hashed(
-        coll_name="patient_presurvey",
+        coll_name="PRE_SURVEY",
         records=pre_unique_records,
         id_fields=["mobile"]
     )
@@ -524,12 +524,12 @@ async def upsert(df_pre, df_post):
         post_unique_records.append(record)
 
     await mongo.upsert_documents_hashed(
-        coll_name="patient_postsurvey",
+        coll_name="POST_SURVEY",
         records=post_unique_records,
         id_fields=["mobile"]
     )
 
-    print(f"Upserted {len(pre_unique_records)} records into MongoDB collection 'patient_presurvey'")
-    print(f"Upserted {len(post_unique_records)} records into MongoDB collection 'patient_postsurvey'")
+    print(f"Upserted {len(pre_unique_records)} records into MongoDB collection 'PRE_SURVEY'")
+    print(f"Upserted {len(post_unique_records)} records into MongoDB collection 'POST_SURVEY'")
 
     return messages

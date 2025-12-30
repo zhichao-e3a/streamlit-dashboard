@@ -121,7 +121,7 @@ async def recruited():
     messages = []
 
     pre_docs = await mongo.get_all_documents(
-        "patient_presurvey",
+        "PRE_SURVEY",
         projection = {
             "_id"                   : 0,
             "name"                  : 1,
@@ -138,7 +138,7 @@ async def recruited():
     )
 
     post_docs = await mongo.get_all_documents(
-        "patient_postsurvey",
+        "POST_SURVEY",
         projection = {
             "_id"                   : 0,
             "mobile"                : 1,
@@ -271,7 +271,7 @@ async def recruited():
             ga_exit_last = ga_entry + (exit_time_last-earliest).days
 
         record = {
-            'type'          : 'rec',
+            'origin'          : 'rec',
             'date_joined'   : earliest.strftime("%Y-%m-%d"),
             'name'          : patient['name'] if pd.notna(patient['name']) else None,
             'mobile'        : patient['mobile'],
@@ -294,7 +294,7 @@ async def recruited():
         new_records.append(record)
 
         await mongo.upsert_documents_hashed(
-            coll_name="patients_unified",
+            coll_name="PATIENTS_UNIFIED",
             records=new_records,
             id_fields = ["mobile"]
         )
@@ -364,7 +364,7 @@ async def historical(hist_df):
         )
 
         record = {
-            'type'          : 'hist',
+            'origin'          : 'hist',
             # 'date_joined'   : row['reg_time'].to_pydatetime().strftime("%Y-%m-%d"),
             'date_joined'   : entry_time.strftime('%Y-%m-%d'),
             'name'          : row['name'] if pd.notna(row['name']) else None,
@@ -388,7 +388,7 @@ async def historical(hist_df):
         new_records.append(record)
 
         await mongo.upsert_documents_hashed(
-            coll_name='patients_unified',
+            coll_name='PATIENTS_UNIFIED',
             records=new_records,
             id_fields=['mobile']
         )

@@ -19,7 +19,7 @@ with st.container():
     with c2:
         end = st.date_input("End Date", date.today(), max_value="today")
 
-patients = get_data(coll_name="patients_unified")
+patients = get_data(coll_name="PATIENTS_UNIFIED")
 
 def pct(old, new):
     return ((new-old)/old)*100
@@ -28,11 +28,11 @@ def pct(old, new):
 curr_patients = [i for i in patients if i['date_joined'] <= end.strftime("%Y-%m-%d") ]
 past_patients = [i for i in patients if i['date_joined'] <= start.strftime("%Y-%m-%d")]
 
-rec         = [i for i in curr_patients if i['type'] == 'rec']
-past_rec    = [i for i in past_patients if i['type'] == 'rec']
+rec         = [i for i in curr_patients if i['origin'] == 'rec']
+past_rec    = [i for i in past_patients if i['origin'] == 'rec']
 
-hist        = [i for i in curr_patients if i['type'] == 'hist']
-past_hist   = [i for i in past_patients if i['type'] == 'hist']
+hist        = [i for i in curr_patients if i['origin'] == 'hist']
+past_hist   = [i for i in past_patients if i['origin'] == 'hist']
 ##################################################
 
 ########## Delivery Status ##########
@@ -54,28 +54,28 @@ past_ecsection  = [i for i in past_delivered if i['delivery_type'] == 'emergency
 curr_valid  = natural + ecsection
 past_valid  = past_natural + past_ecsection
 
-r_curr_valid = sum([1 for i in curr_valid if i['type'] == 'rec'])
-h_curr_valid = sum([1 for i in curr_valid if i['type'] == 'hist'])
-r_past_valid = sum([1 for i in past_valid if i['type'] == 'rec'])
-h_past_valid = sum([1 for i in past_valid if i['type'] == 'hist'])
+r_curr_valid = sum([1 for i in curr_valid if i['origin'] == 'rec'])
+h_curr_valid = sum([1 for i in curr_valid if i['origin'] == 'hist'])
+r_past_valid = sum([1 for i in past_valid if i['origin'] == 'rec'])
+h_past_valid = sum([1 for i in past_valid if i['origin'] == 'hist'])
 
 onset       = [i for i in curr_valid if not pd.isna(i['onset']) and i['onset']]
 past_onset  = [i for i in past_valid if not pd.isna(i['onset']) and i['onset']]
 
-r_curr_onset = sum([1 for i in onset if i['type'] == 'rec'])
-h_curr_onset = sum([1 for i in onset if i['type'] == 'hist'])
-r_past_onset = sum([1 for i in past_onset if i['type'] == 'rec'])
-h_past_onset = sum([1 for i in past_onset if i['type'] == 'hist'])
+r_curr_onset = sum([1 for i in onset if i['origin'] == 'rec'])
+h_curr_onset = sum([1 for i in onset if i['origin'] == 'hist'])
+r_past_onset = sum([1 for i in past_onset if i['origin'] == 'rec'])
+h_past_onset = sum([1 for i in past_onset if i['origin'] == 'hist'])
 
 add         = [i for i in curr_valid if not pd.isna(i['add']) and i['add']]
 past_add    = [i for i in past_valid if not pd.isna(i['add']) and i['add']]
 
-r_curr_add = sum([1 for i in add if i['type'] == 'rec'])
-h_curr_add = sum([1 for i in add if i['type'] == 'hist'])
-r_past_add = sum([1 for i in past_add if i['type'] == 'rec'])
-h_past_add = sum([1 for i in past_add if i['type'] == 'hist'])
+r_curr_add = sum([1 for i in add if i['origin'] == 'rec'])
+h_curr_add = sum([1 for i in add if i['origin'] == 'hist'])
+r_past_add = sum([1 for i in past_add if i['origin'] == 'rec'])
+h_past_add = sum([1 for i in past_add if i['origin'] == 'hist'])
 
-missing_targets = pd.DataFrame(columns=["Mobile", "Type", "Onset", "Actual Delivery"])
+missing_targets = pd.DataFrame(columns=["Mobile", "Origin", "Onset", "Actual Delivery"])
 for i in curr_valid:
 
     f_add, f_onset = i['add'], i['onset']
@@ -89,7 +89,7 @@ for i in curr_valid:
     if f_add == "MISSING" or f_onset == "MISSING":
         missing_targets.loc[len(missing_targets)] = {
             "Mobile": i['mobile'],
-            "Type": i['type'],
+            "Origin": i['origin'],
             "Onset": f_onset,
             "Actual Delivery": f_add
         }
@@ -101,7 +101,7 @@ not_delivered   = [i for i in patients if pd.isna(i['delivery_type'])]
 forecast_table  = [
     {
         "Mobile": i['mobile'],
-        "Type": i['type'],
+        "Origin": i['origin'],
         "Expected Delivery": i["edd"],
         "Expected Days to Delivery": (
                 datetime.strptime(i["edd"], "%Y-%m-%d").date() - date.today()
@@ -121,8 +121,8 @@ past_edd = [i for i in forecast_table if i["Expected Days to Delivery"] < 0]
 
 missing_edd = [
     {
-        "Mobile"    : i['mobile'],
-        "Type"      : i['type']
+        "Mobile": i['mobile'],
+        "Origin": i['origin']
     } for i in not_delivered if not i["edd"]
 ]
 ##################################################
