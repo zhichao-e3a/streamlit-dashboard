@@ -5,7 +5,24 @@ import streamlit as st
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
-# st.session_state.logged_in = True
+if "mode" not in st.session_state:
+    st.session_state.mode = "TEST"
+
+MODES = ["LOCAL", "TEST", "REMOTE"]
+
+def toggle_mode():
+    curr_idx = MODES.index(st.session_state.mode)
+    st.session_state.mode = MODES[(curr_idx + 1) % len(MODES)]
+
+if st.session_state.logged_in:
+    with st.sidebar:
+        st.markdown("### Environment")
+        st.button(
+            f"Switch to {MODES[(MODES.index(st.session_state.mode) + 1) % len(MODES)]}",
+            on_click=toggle_mode,
+            use_container_width=True
+        )
+        st.caption(f"Current: **{st.session_state.mode}**")
 
 ROOT = Path(__file__).resolve().parent
 

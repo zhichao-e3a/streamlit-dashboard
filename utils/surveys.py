@@ -1,14 +1,13 @@
-import os
 import re
 import pandas as pd
+import streamlit as st
 
-from config.configs import REMOTE_MONGO_CONFIG, TEST_MONGO_CONFIG
+from config.configs import REMOTE_MONGO_CONFIG, TEST_MONGO_CONFIG, LOCAL_MONGO_CONFIG
 from database_manager.database.mongo import MongoDBConnector
 
-mode = os.getenv("APP_MODE")
-
-if mode == "test": cfg = TEST_MONGO_CONFIG
-if mode == "remote": cfg = REMOTE_MONGO_CONFIG
+if st.session_state.mode == "TEST": cfg = TEST_MONGO_CONFIG
+if st.session_state.mode == "LOCAL": cfg = LOCAL_MONGO_CONFIG
+elif st.session_state.mode == "REMOTE": cfg = REMOTE_MONGO_CONFIG
 
 AWARENESS_MAP = {"能感受/察觉": "Yes", "不能感受/察觉": "No"}
 

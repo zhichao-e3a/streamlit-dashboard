@@ -60,7 +60,7 @@ hist_file   = st.file_uploader("Upload Historical XLSX", type=["xlsx"], key="his
 
 st.divider()
 
-run = st.button("Run pipeline", type="primary", disabled=not (pre_file and post_file and hist_file))
+run = st.button("Run pipeline", type="primary", disabled=not (pre_file and post_file))
 
 if run:
 
@@ -70,23 +70,31 @@ if run:
 
         pre_df  = pd.read_csv(pre_file)
         post_df = pd.read_csv(post_file)
-        hist_df = pd.read_excel(hist_file)
-
-        messages = asyncio.run(upsert(pre_df, post_df))
 
         st.subheader("Progress Logs")
 
+        messages = asyncio.run(upsert(pre_df, post_df))
+
         for msg in messages:
             st.write(f"`{msg}`")
+
+        s.update(label="Survey Update Complete", state="running")
 
         messages = asyncio.run(recruited())
 
         for msg in messages:
             st.write(f"`{msg}`")
 
-        messages = asyncio.run(historical(hist_df))
+        if hist_file is None: s.update(label="Patient Update Complete", state="complete")
 
-        for msg in messages:
-            st.write(f"`{msg}`")
+        else:
+            s.update(label="Patient Update Complete", state="running")
 
-        s.update(label="Update Complete", state="complete")
+            hist_df = pd.read_excel(hist_file)
+
+            messages = asyncio.run(historical(hist_df))
+
+            for msg in messages:
+                st.write(f"`{msg}`")
+
+            s.update(label="Historical Metadata Update Complete", state="complete")

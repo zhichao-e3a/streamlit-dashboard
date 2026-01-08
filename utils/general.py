@@ -1,15 +1,13 @@
 from config.configs import ST_CRED
 
-import os
 import streamlit as st
 
-from config.configs import REMOTE_MONGO_CONFIG, TEST_MONGO_CONFIG
+from config.configs import REMOTE_MONGO_CONFIG, TEST_MONGO_CONFIG, LOCAL_MONGO_CONFIG
 from database_manager.database.mongo import MongoDBConnector
 
-mode = os.getenv("APP_MODE")
-
-if mode == "test": cfg = TEST_MONGO_CONFIG
-if mode == "remote": cfg = REMOTE_MONGO_CONFIG
+if st.session_state.mode == "TEST": cfg = TEST_MONGO_CONFIG
+if st.session_state.mode == "LOCAL": cfg = LOCAL_MONGO_CONFIG
+elif st.session_state.mode == "REMOTE": cfg = REMOTE_MONGO_CONFIG
 
 def verify_login(username, password):
 
@@ -32,7 +30,7 @@ async def check_patient(mobile):
     mongo = MongoDBConnector(cfg)
 
     docs = await mongo.get_all_documents(
-        coll_name="MERGED_RECORDS",
+        coll_name="RECORDS_PRED",
         query={"mobile": mobile},
         sort=[("measurement_date", 1)]
     )

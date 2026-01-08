@@ -1,19 +1,19 @@
-import os
 import json
-import numpy as np
+# import numpy as np
 import pandas as pd
-from datetime import datetime
+import streamlit as st
+
+# from datetime import datetime
 from typing import Any, Optional
 
-from config.configs import REMOTE_MONGO_CONFIG, TEST_MONGO_CONFIG, SQL_CONFIG
+from config.configs import REMOTE_MONGO_CONFIG, TEST_MONGO_CONFIG, LOCAL_MONGO_CONFIG, SQL_CONFIG
 from database_manager.database.mongo import MongoDBConnector
 from database_manager.database.mysql import SQLDBConnector
-from database_manager.database.queries import RECRUITED_PATIENTS_QUERY, HISTORICAL_PATIENTS_QUERY
+from database_manager.database.queries import HISTORICAL_METADATA_QUERY
 
-mode = os.getenv("APP_MODE")
-
-if mode == "test": cfg = TEST_MONGO_CONFIG
-if mode == "remote": cfg = REMOTE_MONGO_CONFIG
+if st.session_state.mode == "TEST": cfg = TEST_MONGO_CONFIG
+if st.session_state.mode == "LOCAL": cfg = LOCAL_MONGO_CONFIG
+elif st.session_state.mode == "REMOTE": cfg = REMOTE_MONGO_CONFIG
 
 def delivery_type_map(s: Any) -> Any:
     s = "" if s is None else str(s)
@@ -116,11 +116,11 @@ def extract_gest_age(conclusion : str, basic_info : str) -> Optional[int]:
 
 async def recruited():
 
-    sql      = SQLDBConnector(SQL_CONFIG)
     mongo    = MongoDBConnector(cfg)
     messages = []
 
-    pre_docs = await mongo.get_all_documents(
+    # Query all patients from pre-survey
+    all_pre_docs = await mongo.get_all_documents(
         "PRE_SURVEY",
         projection = {
             "_id"                   : 0,
@@ -137,7 +137,9 @@ async def recruited():
         }
     )
 
-    post_docs = await mongo.get_all_documents(
+    # Query all patients from post-survey
+    # There might be new patients who have given birth
+    all_post_docs = await mongo.get_all_documents(
         "POST_SURVEY",
         projection = {
             "_id"                   : 0,
@@ -149,160 +151,197 @@ async def recruited():
         }
     )
 
-    pre = pd.DataFrame(pre_docs) ; post = pd.DataFrame(post_docs)
+    all_recruited = set([i['mobile'] for i in all_pre_docs])
 
-    mobile_query_str    = ",".join([f"'{i['mobile']}'" for i in pre_docs])
-    measurements_df     = sql.query_to_dataframe(query=RECRUITED_PATIENTS_QUERY.format(mobile_query_str=mobile_query_str))
-    measurements_df     = measurements_df.sort_values(["mobile", "m_time"])
-    grouped_df          = measurements_df.groupby("mobile")
+    # All patients who have already given birth (have pre-survey and post-survey)
+    all_given_birth = set([i['mobile'] for i in all_post_docs])
 
-    """
-    Not all patients in pre-survey will be present in database
-    Patients that will not be queried:
-    - Did not register on Modoo (no patient data -> no measurement data)
-    - Did not use Modoo products (no measurement data)
-    """
-    queried_mobile_set = set([mobile for mobile, _ in grouped_df])
+    # All patients who have not given birth yet (only have pre-survey)
+    all_not_given_birth = all_recruited - all_given_birth
 
-    msg = f"[Mongo] {len(pre_docs)} pre-survey records"
+    # Existing patients who have not given birth
+    curr_not_given_birth = await mongo.get_all_documents(coll_name="METADATA_PRED")
+
+    # Existing patients who have given birth
+    curr_given_birth = await mongo.get_all_documents(coll_name="METADATA_REC")
+
+    # New patients who have not given birth
+    new_not_given_birth = all_not_given_birth - set([i['mobile'] for i in curr_not_given_birth])
+
+    # New patients who have given birth
+    new_given_birth = all_given_birth - set([i['mobile'] for i in curr_given_birth])
+
+    msg = f"[Mongo] {len(new_not_given_birth)} new patients who have yet to give birth"
     print(msg) ; messages.append(msg)
 
-    msg = f"[Mongo] {len(post_docs)} post-survey records"
+    msg = f"[Mongo] {len(new_given_birth)} new patients who have given birth"
     print(msg) ; messages.append(msg)
 
-    for d in pre_docs:
+    merged = pd.DataFrame(all_pre_docs).merge(
+        pd.DataFrame(all_post_docs),
+        on='mobile', how='left', suffixes=('_pre', '_post')
+    )
 
-        if d['mobile']  not in queried_mobile_set:
-            print(f"[MySQL] {d['mobile']}: Not registered on Modoo / No measurement data")
+    merged['origin']        = 'REC'
+    merged["age"]           = pd.to_numeric(merged["age"], errors="coerce").astype("Int64")
+    merged["had_pregnancy"] = (merged["had_pregnancy"] == "Yes").astype("Int64")
+    merged["had_preterm"]   = (merged["had_preterm"] == "Yes").astype("Int64")
+    merged["had_surgery"]   = (merged["had_surgery"] == "Yes").astype("Int64")
 
-    msg = f'[MySQL] {len(queried_mobile_set)} patients from MySQL'
-    print(msg) ; messages.append(msg)
+    merged["bmi"] = merged.apply(
+        lambda r: bmi_choose_weight_kg(r["curr_height"], r["pre_weight"]), axis=1
+    )
+    merged["gdm"] = merged.apply(
+        lambda r: flag_contains_1_0(r["diagnosed_conditions"], "妊娠糖尿病"), axis=1
+    )
+    merged["pih"] = merged.apply(
+        lambda r: flag_contains_1_0(r["diagnosed_conditions"], "妊娠高血压"), axis=1
+    )
+    merged["delivery_type"] = merged.apply(
+        lambda r: delivery_type_map(r["delivery_type"]), axis=1
+    )
+    merged["add"] = merged.apply(
+        lambda r: f"{r['add']} {r['delivery_time']}" if pd.notna(r['add']) else None, axis=1
+    )
+    merged["onset"] = merged.apply(
+        lambda r: compute_onset(r), axis=1
+    )
 
-    merged = pre.merge(post, on="mobile", how="left")
-    merged.replace({np.nan: None}, inplace=True)
+    merged["processed"] = False
 
-    new_records = []
-    for _, patient in merged.iterrows():
+    merged.drop(
+        columns=["curr_height", "pre_weight", "water_break_datetime", "diagnosed_conditions", "delivery_time"],
+        inplace=True
+    )
 
-        mobile = patient["mobile"]
-        if mobile not in queried_mobile_set:
-            continue
+    for m in new_given_birth:
+        await mongo.delete_document(coll_name="METADATA_PRED", query={"mobile": m})
 
-        patient_measurements_df = grouped_df.get_group(patient["mobile"])
-        earliest_iter = patient_measurements_df.iterrows() ; ga_entry_iter = patient_measurements_df.iterrows()
+    # date_joined, ga_entry, ga_exit_add, ga_exit_last to be computed later
 
-        # Get ADD (could be None)
-        add = f"{patient['add']} {patient['delivery_time']}" if patient["add"] else None
+    new_given_birth_df      = merged[merged['mobile'].isin(new_given_birth)]
+    new_not_given_birth_df  = merged[merged['mobile'].isin(new_not_given_birth)]
 
-        # Get the earliest measurement (cannot be None)
-        earliest_idx, earliest_m = next(earliest_iter)
-        earliest = earliest_m['m_time']
+    update_not_given_birth = new_not_given_birth_df.to_dict(orient='records')
+    update_given_birth     = new_given_birth_df.to_dict(orient='records')
 
-        # Get the ga_entry for earliest measurement (cannot be None)
-        ga_entry_idx, ga_entry_m = next(ga_entry_iter)
-        basic_info_str  = ga_entry_m['basic_info']
-        conclusion_str  = ga_entry_m['conclusion'] if pd.notna(ga_entry_m['conclusion']) else None
-        ga_entry_temp   = extract_gest_age(conclusion_str, basic_info_str)
+    await mongo.upsert_documents_hashed(
+        coll_name='METADATA_PRED',
+        records=update_not_given_birth,
+        id_fields=['mobile']
+    )
 
-        # Get ga_entry (cannot be None)
-        ga_entry_mismatch = False
-        while ga_entry_temp is None:
-
-            ga_entry_mismatch = True
-
-            ga_entry_idx, ga_entry_m = next(ga_entry_iter)
-
-            basic_info_str  = ga_entry_m['basic_info']
-            conclusion_str  = ga_entry_m['conclusion'] if pd.notna(ga_entry_m['conclusion']) else None
-            ga_entry_temp   = extract_gest_age(conclusion_str, basic_info_str)
-
-        if ga_entry_mismatch:
-            ga_entry = ga_entry_temp - (ga_entry_m['m_time']-earliest).days
-        else:
-            ga_entry = ga_entry_temp
-
-        # Calculate ga_exit_add, ga_exit_last if ADD present ; Recalculate the earliest if needed
-        ga_exit_add = None ; ga_exit_last = None
-        if add is not None:
-
-            # Get Delivery Exit Time and Last Exit Time (None if ADD is None)
-            exit_time_add   = datetime.strptime(add, "%Y-%m-%d %H:%M") if add else None
-            exit_time_last  = patient_measurements_df['m_time'].iloc[-1] if add else None
-
-            # If the measurement date is too early (indicates previous pregnancy, and the earliest measurement is wrong)
-            if (exit_time_add-earliest).days > 280:
-
-                msg = f"[Retry] {mobile}: Recalculate earliest measurement"
-                print(msg) ; messages.append(msg)
-
-                # Recalculate the earliest measurement if the initial one was wrong
-                while (exit_time_add-earliest).days > 280:
-                    earliest_idx, earliest_m = next(earliest_iter)
-                    earliest = earliest_m['m_time']
-
-                # Iterate until ga_entry and earliest meet
-                while ga_entry_idx < earliest_idx:
-                    ga_entry_idx, ga_entry_m = next(ga_entry_iter)
-                while earliest_idx < ga_entry_idx:
-                    earliest_idx, earliest_m = next(earliest_iter)
-
-                basic_info_str  = ga_entry_m['basic_info']
-                conclusion_str  = ga_entry_m['conclusion'] if pd.notna(ga_entry_m['conclusion']) else None
-                ga_entry_temp   = extract_gest_age(conclusion_str, basic_info_str)
-
-                ga_entry_mismatch = False
-                while ga_entry_temp is None:
-
-                    ga_entry_mismatch = True
-
-                    ga_entry_idx, ga_entry_m = next(ga_entry_iter)
-
-                    basic_info_str  = ga_entry_m['basic_info']
-                    conclusion_str  = ga_entry_m['conclusion'] if pd.notna(ga_entry_m['conclusion']) else None
-                    ga_entry_temp   = extract_gest_age(conclusion_str, basic_info_str)
-
-                if ga_entry_mismatch:
-                    ga_entry = ga_entry_temp - (ga_entry_m['m_time'] - earliest).days
-                else:
-                    ga_entry = ga_entry_temp
-
-            # Get ga_exit_add, ga_exit_last
-            ga_exit_add  = ga_entry + (exit_time_add-earliest).days
-            ga_exit_last = ga_entry + (exit_time_last-earliest).days
-
-        record = {
-            'origin'          : 'rec',
-            'date_joined'   : earliest.strftime("%Y-%m-%d"),
-            'name'          : patient['name'] if pd.notna(patient['name']) else None,
-            'mobile'        : patient['mobile'],
-            'age'           : int(patient['age']) if pd.notna(patient['age']) else None,
-            'ga_entry'      : ga_entry,
-            'ga_exit_add'   : ga_exit_add,
-            'ga_exit_last'  : ga_exit_last,# if ga_exit_last <= ga_exit_add else ga_exit_add,
-            'bmi'           : bmi_choose_weight_kg(patient['curr_height'], patient['pre_weight']),
-            'edd'           : patient['edd'] if patient['edd'] else None,
-            'had_pregnancy' : 1 if patient['had_pregnancy'] == 'Yes' else 0,
-            'had_preterm'   : 1 if patient['had_preterm'] == 'Yes' else 0,
-            'had_surgery'   : 1 if patient['had_surgery'] == 'Yes' else 0,
-            'gdm'           : flag_contains_1_0(patient['diagnosed_conditions'], "妊娠糖尿病"),
-            'pih'           : flag_contains_1_0(patient['diagnosed_conditions'], "妊娠高血压"),
-            'delivery_type' : delivery_type_map(patient['delivery_type']),
-            'add'           : add,
-            'onset'         : compute_onset(patient) if add else None
-        }
-
-        new_records.append(record)
-
-        await mongo.upsert_documents_hashed(
-            coll_name="PATIENTS_UNIFIED",
-            records=new_records,
-            id_fields = ["mobile"]
-        )
-
-    msg = f"Recruited: {len(new_records)} consolidated patients upserted"
-    print(msg) ; messages.append(msg)
+    await mongo.upsert_documents_hashed(
+        coll_name='METADATA_REC',
+        records=update_given_birth,
+        id_fields=['mobile']
+    )
 
     return messages
+
+    # record = {
+    #     'date_joined': earliest.strftime("%Y-%m-%d"),
+    #     'ga_entry': ga_entry,
+    #     'ga_exit_add': ga_exit_add,
+    #     'ga_exit_last': ga_exit_last,
+    # }
+    #
+    # mobile_query_str    = ",".join([f"'{i}'" for i in new_not_given_birth])
+    # measurements_df     = sql.query_to_dataframe(
+    #         query=RECRUITED_PATIENTS_QUERY.format(
+    #         start="'2025-03-01 00:00:00'",
+    #         end=f"'{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}'",
+    #         numbers=mobile_query_str
+    #     )
+    # )
+    # measurements_df     = measurements_df.sort_values(["mobile", "m_time"])
+    # grouped_df          = measurements_df.groupby("mobile")
+    # queried_mobile_set = set([mobile for mobile, _ in grouped_df])
+    #
+    # msg = f'[MySQL] {len(queried_mobile_set)} patients from MySQL'
+    # print(msg) ; messages.append(msg)
+
+    # patient_measurements_df = grouped_df.get_group(patient["mobile"])
+    # earliest_iter = patient_measurements_df.iterrows() ; ga_entry_iter = patient_measurements_df.iterrows()
+    #
+    # # Get ADD (could be None)
+    # add = f"{patient['add']} {patient['delivery_time']}" if patient["add"] else None
+    #
+    # # Get the earliest measurement (cannot be None)
+    # earliest_idx, earliest_m = next(earliest_iter)
+    # earliest = earliest_m['m_time']
+    #
+    # # Get the ga_entry for earliest measurement (cannot be None)
+    # ga_entry_idx, ga_entry_m = next(ga_entry_iter)
+    # basic_info_str  = ga_entry_m['basic_info']
+    # conclusion_str  = ga_entry_m['conclusion'] if pd.notna(ga_entry_m['conclusion']) else None
+    # ga_entry_temp   = extract_gest_age(conclusion_str, basic_info_str)
+    #
+    # # Get ga_entry (cannot be None)
+    # ga_entry_mismatch = False
+    # while ga_entry_temp is None:
+    #
+    #     ga_entry_mismatch = True
+    #
+    #     ga_entry_idx, ga_entry_m = next(ga_entry_iter)
+    #
+    #     basic_info_str  = ga_entry_m['basic_info']
+    #     conclusion_str  = ga_entry_m['conclusion'] if pd.notna(ga_entry_m['conclusion']) else None
+    #     ga_entry_temp   = extract_gest_age(conclusion_str, basic_info_str)
+    #
+    # if ga_entry_mismatch:
+    #     ga_entry = ga_entry_temp - (ga_entry_m['m_time']-earliest).days
+    # else:
+    #     ga_entry = ga_entry_temp
+    #
+    # # Calculate ga_exit_add, ga_exit_last if ADD present ; Recalculate the earliest if needed
+    # ga_exit_add = None ; ga_exit_last = None
+    # if add is not None:
+    #
+    #     # Get Delivery Exit Time and Last Exit Time (None if ADD is None)
+    #     exit_time_add   = datetime.strptime(add, "%Y-%m-%d %H:%M") if add else None
+    #     exit_time_last  = patient_measurements_df['m_time'].iloc[-1] if add else None
+    #
+    #     # If the measurement date is too early (indicates previous pregnancy, and the earliest measurement is wrong)
+    #     if (exit_time_add-earliest).days > 280:
+    #
+    #         msg = f"[Retry] {patient['mobile']}: Recalculate earliest measurement"
+    #         print(msg) ; messages.append(msg)
+    #
+    #         # Recalculate the earliest measurement if the initial one was wrong
+    #         while (exit_time_add-earliest).days > 280:
+    #             earliest_idx, earliest_m = next(earliest_iter)
+    #             earliest = earliest_m['m_time']
+    #
+    #         # Iterate until ga_entry and earliest meet
+    #         while ga_entry_idx < earliest_idx:
+    #             ga_entry_idx, ga_entry_m = next(ga_entry_iter)
+    #         while earliest_idx < ga_entry_idx:
+    #             earliest_idx, earliest_m = next(earliest_iter)
+    #
+    #         basic_info_str  = ga_entry_m['basic_info']
+    #         conclusion_str  = ga_entry_m['conclusion'] if pd.notna(ga_entry_m['conclusion']) else None
+    #         ga_entry_temp   = extract_gest_age(conclusion_str, basic_info_str)
+    #
+    #         ga_entry_mismatch = False
+    #         while ga_entry_temp is None:
+    #
+    #             ga_entry_mismatch = True
+    #
+    #             ga_entry_idx, ga_entry_m = next(ga_entry_iter)
+    #
+    #             basic_info_str  = ga_entry_m['basic_info']
+    #             conclusion_str  = ga_entry_m['conclusion'] if pd.notna(ga_entry_m['conclusion']) else None
+    #             ga_entry_temp   = extract_gest_age(conclusion_str, basic_info_str)
+    #
+    #         if ga_entry_mismatch:
+    #             ga_entry = ga_entry_temp - (ga_entry_m['m_time'] - earliest).days
+    #         else:
+    #             ga_entry = ga_entry_temp
+    #
+    #     # Get ga_exit_add, ga_exit_last
+    #     ga_exit_add  = ga_entry + (exit_time_add-earliest).days
+    #     ga_exit_last = ga_entry + (exit_time_last-earliest).days
 
 async def historical(hist_df):
 
@@ -315,12 +354,7 @@ async def historical(hist_df):
     msg = f"[Excel] {len(hist_df)} patients loaded"
     print(msg) ; messages.append(msg)
 
-    mobile_query_str = ",".join([f"'{i}'" for i in hist_df["mobile"].tolist()])
-
-    hist_sql = sql.query_to_dataframe(query=HISTORICAL_PATIENTS_QUERY.format(mobile_query_str=mobile_query_str))
-
-    msg = f"[MySQL] {len(hist_sql)} measurements fetched"
-    print(msg) ; messages.append(msg)
+    hist_sql = sql.query_to_dataframe(query=HISTORICAL_METADATA_QUERY)
 
     hist_pivot = hist_sql.pivot(
         index=[i for i in hist_sql.columns if i not in ['record_type', 'record_answer']],
@@ -328,72 +362,90 @@ async def historical(hist_df):
         values='record_answer'
     ).reset_index()
 
-    msg = f"[MySQL] {len(hist_pivot)} patients fetched"
+    msg = f"[MySQL] {len(hist_pivot)} historical metadata fetched"
     print(msg) ; messages.append(msg)
 
-    merged = hist_df.merge(hist_pivot, on='mobile', how='left')
+    merged = hist_pivot.merge(hist_df, on='mobile', how='left')
 
-    new_records = []
-    for _, row in merged.iterrows():
+    df = merged.copy()
 
-        # Get ga_entry time
-        basic_info_str  = row['basic_info']
-        conclusion_str  = row['conclusion'] if pd.notna(row['conclusion']) else None
-        ga_entry        = extract_gest_age(conclusion_str, basic_info_str)
+    preg_count  = df[1.0]
+    had_preterm = df[8.0]
+    had_surgery = df[13.0]
+    gdm         = df[4.0]
+    pih         = df[5.0]
 
-        # Get ga_exit time (ADD, last measurement)
-        entry_time      = row['earliest']
-        exit_time_add   = row['add']
-        exit_time_last  = row['latest']
-        ga_exit_add     = ga_entry + (exit_time_add - entry_time).days if pd.notna(exit_time_add) else None
-        ga_exit_last    = ga_entry + (exit_time_last - entry_time).days if pd.notna(exit_time_last) else None
+    df["origin"]        = "HIST"
+    df["age"]           = pd.to_numeric(df["age"], errors="coerce").astype("Int64")
+    df["had_pregnancy"] = (preg_count > 1).astype(int)
+    df["had_preterm"]   = (had_preterm == 0).astype(int)
+    df["had_surgery"]   = (had_surgery == 0).astype(int)
+    df["gdm"]           = (gdm == 0).astype(int)
+    df["pih"]           = (pih == 0).astype(int)
 
-        # 0='0 pregnancies', 1='1 pregnancies', 2='2 pregnancies', 3='>2 pregnancies'
-        # Count current pregnancy as well so treat 0 and 1 as same
-        preg_count  = row[1.0]
-        # 0='有', 1='无', 2='未知'
-        had_misc    = row[2.0]
-        gdm         = row[4.0]
-        pih         = row[5.0]
-        had_preterm = row[8.0]
-        had_surgery = row[13.0]
+    df["bmi"] = df.apply(
+        lambda r: bmi_choose_weight_kg(height_cm=r["height"], weight_val=r["old_weight"]),
+        axis=1
+    )
 
-        bmi = bmi_choose_weight_kg(
-            height_cm = row['height'],
-            weight_val = row['old_weight']
-        )
+    df["edd"] = df["expected_born_date"].apply(
+        lambda d: d.strftime("%Y-%m-%d") if pd.notna(d) else None
+    )
 
-        record = {
-            'origin'          : 'hist',
-            # 'date_joined'   : row['reg_time'].to_pydatetime().strftime("%Y-%m-%d"),
-            'date_joined'   : entry_time.strftime('%Y-%m-%d'),
-            'name'          : row['name'] if pd.notna(row['name']) else None,
-            'mobile'        : row['mobile'],
-            'age'           : int(row['age']) if pd.notna(row['age']) else None,
-            'ga_entry'      : ga_entry,
-            'ga_exit_add'   : ga_exit_add,
-            'ga_exit_last'  : ga_exit_last if ga_exit_last <= ga_exit_add else ga_exit_add,
-            'bmi'           : bmi if pd.notna(bmi) else None,
-            'edd'           : row['edd'].strftime("%Y-%m-%d") if pd.notna(row['edd']) else None,
-            'had_pregnancy' : 1 if (preg_count > 1) else 0,
-            'had_preterm'   : 1 if had_preterm == 0 else 0,
-            'had_surgery'   : 1 if had_surgery == 0 else 0,
-            'gdm'           : 1 if gdm == 0 else 0,
-            'pih'           : 1 if pih == 0 else 0,
-            'delivery_type' : row['delivery_type'],
-            'add'           : row['add'].to_pydatetime().strftime("%Y-%m-%d %H:%M"),
-            'onset'         : row['onset'].to_pydatetime().strftime("%Y-%m-%d %H:%M") if pd.notna(row['onset']) else None
-        }
+    df["add"] = df["add"].apply(
+        lambda x: x.strftime("%Y-%m-%d %H:%M") if pd.notna(x) else None
+    )
 
-        new_records.append(record)
+    df["onset"] = df["onset"].apply(
+        lambda x: x.strftime("%Y-%m-%d %H:%M") if pd.notna(x) else None
+    )
 
-        await mongo.upsert_documents_hashed(
-            coll_name='PATIENTS_UNIFIED',
-            records=new_records,
-            id_fields=['mobile']
-        )
+    df["end_born_ts"] = (
+        pd.to_datetime(df["end_born_ts"], unit="s", utc=True)
+        .dt.tz_convert("Asia/Singapore")
+        .dt.strftime("%Y-%m-%d %H:%M")
+    )
 
-    msg = f"Historical: {len(new_records)} consolidated patients upserted"
-    print(msg) ; messages.append(msg)
+    has_delivery_info = (df["add"].notna() | df["onset"].notna() | df["delivery_type"].notna())
+    print( df.loc[~has_delivery_info])
+
+    df.loc[~has_delivery_info, "add"]           = df.loc[~has_delivery_info, "end_born_ts"]
+    df.loc[~has_delivery_info, "onset"]         = None
+    df.loc[~has_delivery_info, "delivery_type"] = None
+
+    df.drop(
+        columns=[1.0, 2.0, 4.0, 5.0, 8.0, 13.0, 'height', 'old_weight', 'expected_born_date', 'end_born_ts'],
+        inplace=True
+    )
+
+    df.drop(columns=df.columns[df.columns.isna()], inplace=True)
+
+    print(df.dtypes)
+
+    await mongo.upsert_documents_hashed(
+        coll_name='METADATA_HIST',
+        records=df.to_dict(orient='records'),
+        id_fields=['mobile']
+    )
 
     return messages
+
+    # Get ga_entry time
+    # basic_info_str  = row['basic_info']
+    # conclusion_str  = row['conclusion'] if pd.notna(row['conclusion']) else None
+    # ga_entry        = extract_gest_age(conclusion_str, basic_info_str)
+    #
+    # Get ga_exit time (ADD, last measurement)
+    # entry_time      = row['earliest']
+    # exit_time_add   = row['add']
+    # exit_time_last  = row['latest']
+    # ga_exit_add     = ga_entry + (exit_time_add - entry_time).days if pd.notna(exit_time_add) else None
+    # ga_exit_last    = ga_entry + (exit_time_last - entry_time).days if pd.notna(exit_time_last) else None
+
+    # record = {
+    #     'origin'          : 'hist',
+    #     'edd'           : row['edd'].strftime("%Y-%m-%d") if pd.notna(row['edd']) else None,
+    #     'delivery_type' : row['delivery_type'],
+    #     'add'           : row['add'].to_pydatetime().strftime("%Y-%m-%d %H:%M"),
+    #     'onset'         : row['onset'].to_pydatetime().strftime("%Y-%m-%d %H:%M") if pd.notna(row['onset']) else None
+    # }
