@@ -40,8 +40,8 @@ if st.session_state.logged_in:
     pg = st.navigation(
         [
             surveys_page,
-            patient_analytics_page,
-            measurements_eda_page
+            # patient_analytics_page,
+            # measurements_eda_page
         ],
         position="sidebar"
     )
