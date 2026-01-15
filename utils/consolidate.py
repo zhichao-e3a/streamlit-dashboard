@@ -11,10 +11,6 @@ from database_manager.database.mongo import MongoDBConnector
 from database_manager.database.mysql import SQLDBConnector
 from database_manager.database.queries import HISTORICAL_METADATA_QUERY
 
-if st.session_state.mode == "TEST": cfg = TEST_MONGO_CONFIG
-if st.session_state.mode == "LOCAL": cfg = LOCAL_MONGO_CONFIG
-elif st.session_state.mode == "REMOTE": cfg = REMOTE_MONGO_CONFIG
-
 def delivery_type_map(s: Any) -> Any:
     s = "" if s is None else str(s)
     if "顺产" in s:
@@ -115,6 +111,13 @@ def extract_gest_age(conclusion : str, basic_info : str) -> Optional[int]:
     return gest_age
 
 async def recruited():
+
+    if st.session_state.mode == "TEST":
+        cfg = TEST_MONGO_CONFIG
+    elif st.session_state.mode == "LOCAL":
+        cfg = LOCAL_MONGO_CONFIG
+    elif st.session_state.mode == "REMOTE":
+        cfg = REMOTE_MONGO_CONFIG
 
     mongo    = MongoDBConnector(cfg)
     messages = []
@@ -344,6 +347,13 @@ async def recruited():
     #     ga_exit_last = ga_entry + (exit_time_last-earliest).days
 
 async def historical(hist_df):
+
+    if st.session_state.mode == "TEST":
+        cfg = TEST_MONGO_CONFIG
+    elif st.session_state.mode == "LOCAL":
+        cfg = LOCAL_MONGO_CONFIG
+    elif st.session_state.mode == "REMOTE":
+        cfg = REMOTE_MONGO_CONFIG
 
     sql         = SQLDBConnector(SQL_CONFIG)
     mongo       = MongoDBConnector(cfg)
