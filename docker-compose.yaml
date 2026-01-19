@@ -11,6 +11,7 @@ services:
 
     volumes:
       - ./config:/app/config:ro
+      - ./logs:/app/logs
 
     restart: unless-stopped
 
@@ -29,6 +30,7 @@ services:
 
     environment:
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      - LOG_DIR=/app/logs
 
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health').read()"]

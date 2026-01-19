@@ -29,7 +29,9 @@ else:
     status = res.get("status")
 
     if status == "empty":
-        st.error(f"❌ {mobile} is invalid / does not exist or the patient has no valid measurements")
+        st.error(
+            f"❌ {mobile} is invalid / does not exist or the patient has no valid measurements"
+        )
 
     else:
         st.subheader("Patient Measurement Summary")
@@ -54,9 +56,9 @@ else:
 
 st.divider()
 
-pre_file    = st.file_uploader("Upload Pre-survey CSV", type=["csv"], key="pre_csv")
-post_file   = st.file_uploader("Upload Post-survey CSV", type=["csv"], key="post_csv")
-hist_file   = st.file_uploader("Upload Historical XLSX", type=["xlsx"], key="hist")
+pre_file = st.file_uploader("Upload Pre-survey CSV", type=["csv"], key="pre_csv")
+post_file = st.file_uploader("Upload Post-survey CSV", type=["csv"], key="post_csv")
+hist_file = st.file_uploader("Upload Historical XLSX", type=["xlsx"], key="hist")
 
 st.divider()
 
@@ -68,7 +70,7 @@ if run:
 
         st.success("Files uploaded")
 
-        pre_df  = pd.read_csv(pre_file)
+        pre_df = pd.read_csv(pre_file)
         post_df = pd.read_csv(post_file)
 
         st.subheader("Progress Logs")
@@ -85,7 +87,8 @@ if run:
         for msg in messages:
             st.write(f"`{msg}`")
 
-        if hist_file is None: s.update(label="Patient Update Complete", state="complete")
+        if hist_file is None:
+            s.update(label="Patient Update Complete", state="complete")
 
         else:
             s.update(label="Patient Update Complete", state="running")
